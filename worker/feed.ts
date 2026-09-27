@@ -140,6 +140,14 @@ function parseAtom(xml: string): ParsedFeed {
   };
 }
 
+/**
+ * Substack feeds carry paid posts as a preview that ends in a lone "Read more" link
+ * back to the post. Length alone can't tell a long preview from a short free post.
+ */
+export function isTruncatedPreview(html: string): boolean {
+  return /<a\b[^>]*>\s*(Read more|Continue reading|계속 읽기|더 보기)\s*<\/a>\s*(<\/p>\s*)?(<\/div>\s*)*$/i.test(html.trimEnd());
+}
+
 /** Plain text from a small HTML fragment (feed descriptions). */
 export function htmlToText(html: string | null): string {
   if (!html) return "";

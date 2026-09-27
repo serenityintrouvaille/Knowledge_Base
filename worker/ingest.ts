@@ -8,7 +8,7 @@ import type { Block, SourceType } from "../shared/types";
 import { buildBrief, previewSentence } from "./brief";
 import type { Env } from "./env";
 import { blocksToText, extractGeneric, extractNaver, fetchText, inspectPage } from "./extract";
-import { htmlToText, isFeedDocument, parseFeed, type ParsedFeed } from "./feed";
+import { htmlToText, isFeedDocument, isTruncatedPreview, parseFeed, type ParsedFeed } from "./feed";
 import { canonicalUrl, parseNaver, validatePublicUrl } from "./urls";
 
 const DAY = 86_400_000;
@@ -77,7 +77,7 @@ export async function discoverSource(raw: string): Promise<Discovered> {
       // try the next candidate
     }
   }
-  throw new Error("No RSS or Atom feed found at that address. You can still add single articles by link.");
+  throw new Error("No RSS or Atom feed found at that address. For a newsletter, paste the newsletter's own site (for example name.substack.com). You can still add single articles by link.");
 }
 
 interface SourceRow {
@@ -180,9 +180,11 @@ export async function processItem(env: Env, item: QueuedItem): Promise<void> {
 
   try {
     if (item.raw_html != null) {
+      const truncated = isTruncatedPreview(item.raw_html);
       blocks = await extractGeneric(item.raw_html, item.canonical_url);
+      if (truncated) blocks = blocks.filter((b) => b.t === "img" || !/^(read more|continue reading|계속 읽기|더 보기)$/i.test(b.text));
       const text = blocksToText(blocks);
-      const paywalled = PAYWALL.test(text.slice(-1500));
+      const paywalled = truncated || PAYWALL.test(text.slice(-1500));
       access = text.length >= 1500 && !paywalled ? "full" : text ? "excerpt" : access;
     } else if (item.type === "naver") {
       const ref = parseNaver(item.canonical_url);

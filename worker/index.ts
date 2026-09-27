@@ -236,7 +236,8 @@ app.post("/sources", async (c) => {
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : "Could not add that source." }, 400);
   }
-  const exists = await c.env.DB.prepare("SELECT id FROM sources WHERE feed_url = ?").bind(found.feedUrl).first<{ id: number }>();
+  // A Substack on a custom domain has two feed URLs for one publication; match on the site too.
+  const exists = await c.env.DB.prepare("SELECT id FROM sources WHERE feed_url = ? OR (url = ? AND type != 'manual')").bind(found.feedUrl, found.url).first<{ id: number }>();
   if (exists) return c.json({ error: `Already following ${found.name}.` }, 409);
   const now = Date.now();
   const row = await c.env.DB.prepare(

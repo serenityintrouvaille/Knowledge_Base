@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFeed, htmlToText, isFeedDocument } from "../worker/feed";
+import { parseFeed, htmlToText, isFeedDocument, isTruncatedPreview } from "../worker/feed";
 import { canonicalUrl, parseNaver, validatePublicUrl } from "../worker/urls";
 import { buildBrief, previewSentence, readingMinutes, splitUnits } from "../worker/brief";
 
@@ -56,6 +56,14 @@ describe("parseFeed", () => {
     expect(f.link).toBe("https://a.test/");
     expect(f.entries[0]).toMatchObject({ title: "A <em>post</em>", link: "https://a.test/p/1", author: "Ann" });
     expect(f.entries[0].published).toBe(Date.parse("2026-09-01T10:00:00Z"));
+  });
+
+  it("recognises Substack paid previews by their trailing Read more link", () => {
+    const preview = `<p>First part of a paid post.</p>\n<p>\n  <a href="https://insight.example.com/p/deal">\n    Read more\n  </a>\n</p>\n  `;
+    expect(isTruncatedPreview(preview)).toBe(true);
+    const free = `<p>Whole post.</p><p><a class="button primary" href="https://x.test/p/a?action=share"><span>Share</span></a></p><p></p>`;
+    expect(isTruncatedPreview(free)).toBe(false);
+    expect(isTruncatedPreview(`<p>Read more about <a href="/x">this</a> later in the essay.</p>`)).toBe(false);
   });
 
   it("detects feed documents", () => {
