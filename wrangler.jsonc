@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "daily-archive",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "daily-archive",
+      "database_id": "6d683421-5e66-4fe2-aee6-f1661bfbb013",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Feeds are checked every few hours; each run also works through a small
+  // batch of queued full-text fetches so a single invocation stays cheap.
+  "triggers": { "crons": ["*/30 * * * *"] },
+  "observability": { "enabled": true }
+}
