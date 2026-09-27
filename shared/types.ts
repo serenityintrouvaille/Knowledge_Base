@@ -1,7 +1,7 @@
 // Shapes shared by the Worker API and the React app.
 
 export type AccessLevel = "full" | "excerpt" | "metadata";
-export type SourceType = "naver" | "substack" | "feed" | "manual";
+export type SourceType = "naver" | "substack" | "telegram" | "feed" | "manual";
 
 /** Article body stored as plain-text blocks, so imported HTML is never rendered. */
 export type Block =

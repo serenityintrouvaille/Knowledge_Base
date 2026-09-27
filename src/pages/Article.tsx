@@ -42,6 +42,7 @@ function sourceHost(url: string): string {
   const host = new URL(url).hostname.replace(/^(www|m)\./, "");
   if (host.endsWith("naver.com")) return "Naver";
   if (host.endsWith("substack.com")) return "Substack";
+  if (host === "t.me" || host === "telegram.me") return "Telegram";
   return host;
 }
 
@@ -214,6 +215,9 @@ export function Article() {
               </div>
             </header>
 
+            {isFull && (!brief || brief.status === "unavailable") ? (
+              <p className="brief-short">Short post: the full text is below, so there’s no brief.</p>
+            ) : (
             <section className="brief" aria-labelledby="brief-h">
               <h2 id="brief-h" className="brief-h">
                 The brief
@@ -240,6 +244,7 @@ export function Article() {
                 </p>
               )}
             </section>
+            )}
 
             <section className="reader-body" aria-label={isFull ? "Original text" : "Excerpt"}>
               <h2 className="body-label">{isFull ? "Original text" : item.accessLevel === "excerpt" ? "Excerpt" : "No text available"}</h2>

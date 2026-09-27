@@ -8,7 +8,7 @@ import { Sheet } from "../components/Sheet";
 import { relative } from "../format";
 import { FONT_SIZES, usePrefs, type Theme } from "../prefs";
 
-const TYPE_LABEL: Record<Source["type"], string> = { naver: "Naver blog", substack: "Substack", feed: "Feed", manual: "Added by hand" };
+const TYPE_LABEL: Record<Source["type"], string> = { naver: "Naver blog", substack: "Substack", telegram: "Telegram", feed: "Feed", manual: "Added by hand" };
 
 function SourceRow({ source, onChanged, onEdit }: { source: Source; onChanged: () => void; onEdit: (s: Source) => void }) {
   const [busy, setBusy] = useState(false);
@@ -171,7 +171,7 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
         <form className="add-form" onSubmit={addSource}>
           <label className="field">
             <span>Follow a source</span>
-            <input type="url" inputMode="url" autoCapitalize="off" autoCorrect="off" placeholder="Naver blog, Substack, or any site with a feed" value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)} />
+            <input type="url" inputMode="url" autoCapitalize="off" autoCorrect="off" placeholder="Naver blog, Substack, Telegram channel, or any feed" value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)} />
           </label>
           <button type="submit" className="btn" disabled={busy === "source" || !feedUrl.trim()}>
             {busy === "source" ? "Looking for a feed…" : "Follow"}

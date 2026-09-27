@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseFeed, htmlToText, isFeedDocument, isTruncatedPreview } from "../worker/feed";
 import { canonicalUrl, parseNaver, validatePublicUrl } from "../worker/urls";
 import { buildBrief, previewSentence, readingMinutes, splitUnits } from "../worker/brief";
+import { oldestPostNumber, parseTelegram, parseTelegramPage } from "../worker/telegram";
 
 const RSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -129,5 +130,49 @@ describe("brief", () => {
     expect(readingMinutes("가".repeat(2500))).toBe(5);
     expect(readingMinutes("word ".repeat(460))).toBe(2);
     expect(readingMinutes("short")).toBeNull();
+  });
+});
+
+describe("telegram", () => {
+  const page = `<html><head><meta property="og:title" content="Harvey&#39;s Macro Story"><meta property="og:image" content="https://cdn.test/a.jpg"></head><body>
+<div class="tgme_channel_info">x</div>
+<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="chan/10">
+<a class="tgme_widget_message_reply" href="https://t.me/chan/9"><div class="tgme_widget_message_text js-message_text">quoted older post</div></a>
+<div class="tgme_widget_message_forwarded_from accent_color">Forwarded from&nbsp;<a class="tgme_widget_message_forwarded_from_name" href="https://t.me/other/1"><span dir="auto">Other &amp; Co</span></a></div>
+<a class="tgme_widget_message_photo_wrap 1 2" href="https://t.me/chan/10" style="width:800px;background-image:url('https://cdn.test/p.jpg')"></a>
+<div class="tgme_widget_message_text js-message_text" dir="auto">09/21 주말 이슈: 독일 지방선거<br/><br/>AfD가 약 37.9%로 1위를 기록했다.<br/>둘째 줄.</div>
+<a class="tgme_widget_message_date" href="https://t.me/chan/10"><time datetime="2026-09-20T22:18:53+00:00" class="time">x</time></a>
+</div></div>
+<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="chan/11"><div class="tgme_widget_message_sticker_wrap"></div>
+<a class="tgme_widget_message_date" href="https://t.me/chan/11"><time datetime="2026-09-21T00:00:00+00:00" class="time">x</time></a></div></div>
+</body></html>`;
+
+  it("recognises public channel links only", () => {
+    expect(parseTelegram("https://t.me/wcforumxyz")).toBe("wcforumxyz");
+    expect(parseTelegram("https://t.me/s/harveyspecterMike")).toBe("harveyspecterMike");
+    expect(parseTelegram("https://t.me/ehdwl/11122")).toBe("ehdwl");
+    expect(parseTelegram("https://t.me/+AbCdEf123")).toBeNull();
+    expect(parseTelegram("https://t.me/joinchat/xyz")).toBeNull();
+    expect(parseTelegram("https://t.me/c/12345/6")).toBeNull();
+    expect(parseTelegram("https://example.com/ehdwl")).toBeNull();
+  });
+
+  it("reads posts, skipping reply quotes and text-less messages", () => {
+    const f = parseTelegramPage(page, "chan");
+    expect(f.title).toBe("Harvey's Macro Story");
+    expect(f.entries).toHaveLength(1);
+    const [e] = f.entries;
+    expect(e.link).toBe("https://t.me/chan/10");
+    expect(e.title).toBe("09/21 주말 이슈: 독일 지방선거");
+    expect(e.author).toBe("Forwarded from Other & Co");
+    expect(e.published).toBe(Date.parse("2026-09-20T22:18:53Z"));
+    expect(e.imageUrl).toBe("https://cdn.test/p.jpg");
+    expect(e.contentHtml).not.toContain("quoted older post");
+    expect(e.contentHtml).toContain("<p>AfD가 약 37.9%로 1위를 기록했다.<br/>둘째 줄.</p>");
+    expect(oldestPostNumber(f)).toBe(10);
+  });
+
+  it("explains when a channel has no public preview", () => {
+    expect(() => parseTelegramPage("<html><body>nothing</body></html>", "private_one")).toThrow(/public channel/);
   });
 });

@@ -9,6 +9,7 @@ import { buildBrief, previewSentence } from "./brief";
 import type { Env } from "./env";
 import { blocksToText, extractGeneric, extractNaver, fetchText, inspectPage } from "./extract";
 import { htmlToText, isFeedDocument, isTruncatedPreview, parseFeed, type ParsedFeed } from "./feed";
+import { oldestPostNumber, parseTelegram, parseTelegramPage, telegramFeedUrl } from "./telegram";
 import { canonicalUrl, parseNaver, validatePublicUrl } from "./urls";
 
 const DAY = 86_400_000;
@@ -16,6 +17,8 @@ const FIRST_SYNC_UNREAD_DAYS = 7; // older items from a newly added source start
 const FULLTEXT_BACKFILL_DAYS = 14; // older items fetch full text only when opened
 const MAX_ATTEMPTS = 3;
 const MAX_TEXT = 200_000;
+const SMALL_INLINE_HTML = 20_000;
+const INLINE_PER_RUN = 12;
 const PAYWALL = /(this post is for paid subscribers|keep reading with a 7-day free trial|subscribe to .{1,60} to (read|keep reading|unlock)|upgrade to paid|유료 구독자)/i;
 
 export interface Discovered {
@@ -33,9 +36,37 @@ async function loadFeed(feedUrl: string): Promise<{ xml: string; feed: ParsedFee
   return { xml: body, feed: parseFeed(body) };
 }
 
+async function loadTelegram(feedUrl: string): Promise<ParsedFeed> {
+  const channel = parseTelegram(feedUrl);
+  if (!channel) throw new Error("Not a Telegram channel link.");
+  const { body } = await fetchText(feedUrl);
+  return parseTelegramPage(body, channel);
+}
+
+function loadSourceFeed(type: SourceType, feedUrl: string): Promise<ParsedFeed> {
+  return type === "telegram" ? loadTelegram(feedUrl) : loadFeed(feedUrl).then((r) => r.feed);
+}
+
+/** Card preview for a Telegram post: its first line is already the title, so skip it. */
+function telegramPreview(text: string | null): string | null {
+  if (!text) return null;
+  const rest = text.split("\n").slice(1).join("\n").trim();
+  return rest ? previewSentence(rest) : null;
+}
+
 /** Resolve whatever the user pasted (blog page, post, publication, feed) into a feed source. */
 export async function discoverSource(raw: string): Promise<Discovered> {
   const url = validatePublicUrl(raw);
+
+  const channel = parseTelegram(url.toString());
+  if (channel) {
+    const feedUrl = telegramFeedUrl(channel);
+    const feed = await loadTelegram(feedUrl);
+    return { name: feed.title ?? `@${channel}`, url: `https://t.me/${channel}`, feedUrl, type: "telegram", iconUrl: feed.imageUrl, feed };
+  }
+  if (/^(www\.)?(t|telegram)\.me$/i.test(url.hostname)) {
+    throw new Error("Only public Telegram channels can be followed (a link like https://t.me/channelname). Private channels, groups and invite links need a login.");
+  }
 
   const naver = parseNaver(url.toString());
   if (naver) {
@@ -117,7 +148,7 @@ export async function storeEntries(env: Env, source: SourceRow, feed: ParsedFeed
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         source.id, canonical, e.id, e.title.slice(0, 500), e.author, e.published, now, sortTime,
-        e.imageUrl, excerptText, excerptText ? previewSentence(excerptText) : null, rawHtml,
+        e.imageUrl, excerptText, source.type === "telegram" ? telegramPreview(excerptText) : excerptText ? previewSentence(excerptText) : null, rawHtml,
         excerptText ? "excerpt" : "metadata", status,
       ),
     );
@@ -137,8 +168,15 @@ export async function checkSource(env: Env, source: SourceRow): Promise<{ added:
   const now = Date.now();
   try {
     if (!source.feed_url) return { added: 0 };
-    const { feed } = await loadFeed(source.feed_url);
-    const added = await storeEntries(env, source, feed);
+    const feed = await loadSourceFeed(source.type, source.feed_url);
+    let added = await storeEntries(env, source, feed);
+    // A Telegram page shows only the latest ~20 posts. If every one was new, posts may
+    // have been missed since the last check, so read one page further back.
+    const oldest = source.type === "telegram" ? oldestPostNumber(feed) : null;
+    if (oldest && source.last_success_at != null && added >= feed.entries.length && feed.entries.length > 0) {
+      const older = await loadTelegram(`${source.feed_url}?before=${oldest}`).catch(() => null);
+      if (older) added += await storeEntries(env, source, older);
+    }
     await env.DB.prepare("UPDATE sources SET last_checked_at = ?, last_success_at = ?, last_error = NULL WHERE id = ?").bind(now, now, source.id).run();
     return { added };
   } catch (err) {
@@ -185,7 +223,9 @@ export async function processItem(env: Env, item: QueuedItem): Promise<void> {
       if (truncated) blocks = blocks.filter((b) => b.t === "img" || !/^(read more|continue reading|계속 읽기|더 보기)$/i.test(b.text));
       const text = blocksToText(blocks);
       const paywalled = truncated || PAYWALL.test(text.slice(-1500));
-      access = text.length >= 1500 && !paywalled ? "full" : text ? "excerpt" : access;
+      // A Telegram post is complete in the channel page, however short it is.
+      if (item.type === "telegram") access = text ? "full" : "metadata";
+      else access = text.length >= 1500 && !paywalled ? "full" : text ? "excerpt" : access;
     } else if (item.type === "naver") {
       const ref = parseNaver(item.canonical_url);
       if (!ref?.logNo) throw new Error("Not a Naver post URL.");
@@ -216,7 +256,10 @@ export async function processItem(env: Env, item: QueuedItem): Promise<void> {
   const text = blocksToText(blocks).slice(0, MAX_TEXT);
   const brief = buildBrief(text);
   const now = Date.now();
-  const preview = brief.paragraphs[0] ? previewSentence(brief.paragraphs[0]) : previewSentence(item.excerpt ?? text);
+  const preview =
+    item.type === "telegram"
+      ? telegramPreview(text)
+      : brief.paragraphs[0] ? previewSentence(brief.paragraphs[0]) : previewSentence(item.excerpt ?? text);
 
   await env.DB.batch([
     env.DB.prepare(
@@ -247,7 +290,15 @@ const QUEUE_SELECT = `SELECT i.id, i.canonical_url, i.excerpt, i.raw_html, i.fet
 export async function processQueued(env: Env, limit: number): Promise<number> {
   // Items that crashed their invocation MAX_ATTEMPTS times are retired so they can't block the queue.
   await env.DB.prepare("UPDATE items SET text_status = 'failed' WHERE text_status = 'pending' AND fetch_attempts >= ?").bind(MAX_ATTEMPTS).run();
-  const { results } = await env.DB.prepare(`${QUEUE_SELECT} WHERE i.text_status = 'pending' ORDER BY i.sort_time DESC LIMIT ?`).bind(limit).all<QueuedItem>();
+  // Items whose text arrived in the feed need no fetch and little CPU when small, so
+  // a run takes several of those on top of `limit` items that need a page fetch.
+  const inline = await env.DB.prepare(
+    `${QUEUE_SELECT} WHERE i.text_status = 'pending' AND i.raw_html IS NOT NULL AND LENGTH(i.raw_html) < ? ORDER BY i.sort_time DESC LIMIT ?`,
+  ).bind(SMALL_INLINE_HTML, INLINE_PER_RUN).all<QueuedItem>();
+  const fetched = await env.DB.prepare(
+    `${QUEUE_SELECT} WHERE i.text_status = 'pending' AND (i.raw_html IS NULL OR LENGTH(i.raw_html) >= ?) ORDER BY i.sort_time DESC LIMIT ?`,
+  ).bind(SMALL_INLINE_HTML, limit).all<QueuedItem>();
+  const results = [...inline.results, ...fetched.results];
   for (const item of results) await processItem(env, item);
   return results.length;
 }
